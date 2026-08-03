@@ -1415,6 +1415,10 @@ class AppSettings(HonchoSettings):
     EMBED_MESSAGES: bool = True
     LANGFUSE_HOST: str | None = None
     LANGFUSE_PUBLIC_KEY: str | None = None
+    
+    PHOENIX_COLLECTOR_ENDPOINT: str | None = None
+    PHOENIX_PROJECT_NAME: str | None = None
+
     # How Langfuse traces are produced:
     #   "exporter" (default) — Langfuse is a projection over the captured
     #     CapturedLLMCall stream (LangfuseExporter), the same source of truth as
@@ -1438,6 +1442,11 @@ class AppSettings(HonchoSettings):
         return (
             bool(self.LANGFUSE_PUBLIC_KEY) and self.LANGFUSE_EXPORTER_MODE == "exporter"
         )
+
+    @property
+    def phoenix_exporter_enabled(self) -> bool:
+        """True when the Phoenix exporter is active."""
+        return bool(self.PHOENIX_COLLECTOR_ENDPOINT)
 
     # Origins allowed by the FastAPI CORSMiddleware
     CORS_ORIGINS: list[str] = [

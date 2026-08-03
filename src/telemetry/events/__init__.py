@@ -230,6 +230,28 @@ async def initialize_telemetry_events() -> None:
         register_exporter(LangfuseExporter())
         logger.info("Langfuse exporter registered (LANGFUSE_EXPORTER_MODE=exporter)")
 
+    if settings.phoenix_exporter_enabled:
+        from opentelemetry.sdk.trace import TracerProvider
+        from opentelemetry.sdk.trace.export import BatchSpanProcessor
+        from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+        from opentelemetry.sdk.resources import Resource
+        from opentelemetry import trace
+        from src.llm.capture import register_exporter
+        from src.telemetry.phoenix_exporter import PhoenixExporter
+
+        project_name = settings.PHOENIX_PROJECT_NAME or "honcho"
+        resource = Resource.create({
+            "project.name": project_name,
+            "phoenix.project.name": project_name
+        })
+        provider = TracerProvider(resource=resource)
+        processor = BatchSpanProcessor(OTLPSpanExporter(endpoint=settings.PHOENIX_COLLECTOR_ENDPOINT))
+        provider.add_span_processor(processor)
+        trace.set_tracer_provider(provider)
+        
+        register_exporter(PhoenixExporter())
+        logger.info("Phoenix exporter registered")
+
     await initialize_emitter(
         endpoint=settings.TELEMETRY.ENDPOINT,
         headers=settings.TELEMETRY.HEADERS,
@@ -276,13 +298,24 @@ async def shutdown_telemetry_events() -> None:
     # Tear down the trace path first (flush its buffer, drop exporters + dedup
     # state) before the primary emitter, so a late capture can't re-register work.
     from src.llm.capture import clear_exporters
-    from src.telemetry import langfuse_session, trace_session
+    from src.telemetry import langfuse_session, trace_session, phoenix_session
     from src.telemetry.emitter import shutdown_emitter, shutdown_trace_emitter
 
     clear_exporters()
     await shutdown_trace_emitter()
     trace_session.reset()
     langfuse_session.reset()
+    phoenix_session.reset()
+
+    try:
+        from opentelemetry import trace
+        from opentelemetry.sdk.trace import TracerProvider
+        tracer_provider = trace.get_tracer_provider()
+        if isinstance(tracer_provider, TracerProvider):
+            tracer_provider.force_flush()
+            tracer_provider.shutdown()
+    except ImportError:
+        pass
 
     await shutdown_emitter()
     logger.info("CloudEvents telemetry shutdown complete")
