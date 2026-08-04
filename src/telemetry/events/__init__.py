@@ -248,9 +248,9 @@ async def initialize_telemetry_events() -> None:
         processor = BatchSpanProcessor(OTLPSpanExporter(endpoint=settings.PHOENIX_COLLECTOR_ENDPOINT))
         provider.add_span_processor(processor)
         trace.set_tracer_provider(provider)
-        
+
         register_exporter(PhoenixExporter())
-        logger.info("Phoenix exporter registered")
+        logger.info("Phoenix exporter registered, endpoint: %s", settings.PHOENIX_COLLECTOR_ENDPOINT)
 
     await initialize_emitter(
         endpoint=settings.TELEMETRY.ENDPOINT,
