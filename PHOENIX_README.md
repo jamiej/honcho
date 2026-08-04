@@ -34,6 +34,20 @@ ENABLED = true
 
 *Note: If the telemetry master switch (`TELEMETRY_ENABLED` or `[telemetry] ENABLED`) is set to `false`, Phoenix configuration will be entirely ignored, and no traces will be emitted.*
 
+### Project Routing & Authentication Headers
+
+By default, the Python exporter automatically sends `PHOENIX_PROJECT_NAME` via the **`x-project-name`** HTTP header. Phoenix's HTTP OTLP collector specifically requires this header (over OpenTelemetry resource attributes) to route traces to the correct project.
+
+If you need to pass additional headers (for example, authentication tokens or API keys to a managed Phoenix instance), you should use the standard OpenTelemetry environment variable `OTEL_EXPORTER_OTLP_HEADERS`.
+
+In your `.env` or `docker-compose.yml`:
+```env
+# Pass auth tokens or other configuration headers
+OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer my-secret-token"
+```
+
+*Note: Per the OpenTelemetry specification, programmatic headers set in the application code (like our `x-project-name` injection) take strict precedence over `OTEL_EXPORTER_OTLP_HEADERS` during the header merge. This allows DevOps to inject auth freely via the environment variable without accidentally breaking the application's project routing logic.*
+
 ---
 
 ## Architectural Changes & Breakdown

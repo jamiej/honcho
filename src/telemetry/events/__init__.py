@@ -245,7 +245,10 @@ async def initialize_telemetry_events() -> None:
             "phoenix.project.name": project_name
         })
         provider = TracerProvider(resource=resource)
-        processor = BatchSpanProcessor(OTLPSpanExporter(endpoint=settings.PHOENIX_COLLECTOR_ENDPOINT))
+        processor = BatchSpanProcessor(OTLPSpanExporter(
+            endpoint=settings.PHOENIX_COLLECTOR_ENDPOINT,
+            headers={"x-project-name": project_name}
+        ))
         provider.add_span_processor(processor)
         trace.set_tracer_provider(provider)
 
