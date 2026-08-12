@@ -8,7 +8,7 @@ resolution-markers = [
 ]
 
 [options]
-exclude-newer = "2026-07-29T21:55:51.174378156Z"
+exclude-newer = "2026-08-07T07:14:32.979117772Z"
 exclude-newer-span = "P5D"
 
 [manifest]
@@ -1159,7 +1159,7 @@ wheels = [
 
 [[package]]
 name = "honcho"
-version = "3.0.11"
+version = "3.0.12"
 source = { virtual = "." }
 dependencies = [
     { name = "alembic" },
@@ -1278,7 +1278,7 @@ dev = [
 
 [[package]]
 name = "honcho-ai"
-version = "2.2.0"
+version = "2.3.0"
 source = { editable = "sdks/python" }
 dependencies = [
     { name = "httpx" },
@@ -2013,11 +2013,11 @@ wheels = [
 
 [[package]]
 name = "openinference-semantic-conventions"
-version = "0.1.30"
+version = "0.1.31"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/2c/51/8ba1182ee86fc79793d5ff2d11e7fdcda10ded2d01f3e46ca6fcf0568213/openinference_semantic_conventions-0.1.30.tar.gz", hash = "sha256:81fece76e09c83789e35c393b8b30523481eeabf1008745b955631a53e3221d9", size = 13391, upload-time = "2026-05-22T21:10:44.065Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/c5/3e/8f96e000651a01c801d98736c63aaf4140dd5a68a325cad92045c53484dd/openinference_semantic_conventions-0.1.31.tar.gz", hash = "sha256:39bed2e6edabb5b8dd983e22d3d4914e660ff1f8a49d7df8ceae938af5bb5836", size = 13966, upload-time = "2026-08-01T16:13:21.334Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b6/76/5b7e78cf0de38589b821bbe8e9c29c59a6e76edfb980488d0854cbb90f7c/openinference_semantic_conventions-0.1.30-py3-none-any.whl", hash = "sha256:36d946d3f95f699b7c4b12324ae9c1f02d6c7750df11eece56aa159cff430b3d", size = 10911, upload-time = "2026-05-22T21:10:43.04Z" },
+    { url = "https://files.pythonhosted.org/packages/b6/d5/9d32686b8911ca79001dd0a352e89069a0b3749446b37859494805dd1bf1/openinference_semantic_conventions-0.1.31-py3-none-any.whl", hash = "sha256:ae7eee916622dc9f64ea14cae26911c78653b1c0d7a62a56788934d5830f3472", size = 11241, upload-time = "2026-08-01T16:13:20.153Z" },
 ]
 
 [[package]]
