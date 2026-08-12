@@ -13,23 +13,23 @@ from src.telemetry import phoenix_session
 
 @pytest.fixture
 def phoenix_telemetry(monkeypatch):
-    monkeypatch.setattr(settings, "PHOENIX_COLLECTOR_ENDPOINT", "http://localhost:4318/v1/traces")
+    monkeypatch.setattr(settings, "PHOENIX_COLLECTOR_ENDPOINT", "http://localhost:6006/v1/traces")
     monkeypatch.setattr(settings, "NAMESPACE", "test-namespace")
     phoenix_session.reset()
-    
+
     provider = TracerProvider()
     memory_exporter = InMemorySpanExporter()
     processor = SimpleSpanProcessor(memory_exporter)
     provider.add_span_processor(processor)
     trace.set_tracer_provider(provider)
-    
+
     yield memory_exporter
-    
+
     phoenix_session.reset()
 
 def test_export_call_with_generation(phoenix_telemetry):
     exporter = PhoenixExporter()
-    
+
     call = CapturedLLMCall(
         trace_id="test-trace",
         span_id="test-span",
@@ -69,21 +69,21 @@ def test_export_call_with_generation(phoenix_telemetry):
         was_stream=False,
         input_truncated=False
     )
-    
+
     exporter.export(call)
-    
+
     spans = phoenix_telemetry.get_finished_spans()
-    
+
     assert len(spans) == 3
     run_span = next(s for s in spans if s.name == "chat")
     step_span = next(s for s in spans if s.name == "chat step")
     gen_span = next(s for s in spans if s.name == "chat generation")
-    
+
     # Check tree structure
     assert gen_span.parent.span_id == step_span.context.span_id
     assert step_span.parent.span_id == run_span.context.span_id
     assert run_span.parent is None
-    
+
     # Check attributes
     assert gen_span.attributes[SpanAttributes.OPENINFERENCE_SPAN_KIND] == OpenInferenceSpanKindValues.LLM.value
     assert gen_span.attributes[SpanAttributes.LLM_MODEL_NAME] == "gpt-4o"
@@ -96,7 +96,7 @@ def test_export_call_with_generation(phoenix_telemetry):
 
 def test_export_tool_call(phoenix_telemetry):
     exporter = PhoenixExporter()
-    
+
     call = CapturedLLMCall(
         trace_id="test-trace",
         span_id="test-span",
@@ -134,14 +134,14 @@ def test_export_tool_call(phoenix_telemetry):
         was_stream=False,
         input_truncated=False
     )
-    
+
     exporter.export(call)
-    
+
     spans = phoenix_telemetry.get_finished_spans()
-    
+
     # run span, step span, generation span, tool span (4 spans)
     assert len(spans) == 4
-    
+
     tool_span = next(s for s in spans if s.name == "test_tool")
     assert tool_span.attributes[SpanAttributes.OPENINFERENCE_SPAN_KIND] == OpenInferenceSpanKindValues.TOOL.value
     assert tool_span.attributes[SpanAttributes.INPUT_VALUE] == json.dumps({"arg": "val"})

@@ -14,7 +14,7 @@ Add the following to your `.env` file:
 TELEMETRY_ENABLED=true
 
 # 2. Set the Phoenix OTLP endpoint (must include the /v1/traces path)
-PHOENIX_COLLECTOR_ENDPOINT=http://<your-phoenix-host>:4318/v1/traces
+PHOENIX_COLLECTOR_ENDPOINT=http://<your-phoenix-host>:6006/v1/traces
 
 # 3. Specify the workspace/project name where the traces will be routed
 PHOENIX_PROJECT_NAME=honcho-dev
@@ -25,7 +25,7 @@ If you are managing configuration via a `config.toml` file, set it like so:
 
 ```toml
 [app]
-PHOENIX_COLLECTOR_ENDPOINT = "http://<your-phoenix-host>:4318/v1/traces"
+PHOENIX_COLLECTOR_ENDPOINT = "http://<your-phoenix-host>:6006/v1/traces"
 PHOENIX_PROJECT_NAME = "honcho-dev"
 
 [telemetry]
