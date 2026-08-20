@@ -2,7 +2,8 @@ import logging
 import math
 import os
 from pathlib import Path
-from typing import Annotated, Any, ClassVar, Literal, cast
+from typing import Annotated, Any, ClassVar, Literal, cast, get_args
+from urllib.parse import urlparse
 
 import tomllib
 from dotenv import load_dotenv
@@ -26,11 +27,16 @@ logger = logging.getLogger(__name__)
 ModelTransport = Literal["anthropic", "openai", "gemini"]
 EmbeddingTransport = Literal["openai", "gemini"]
 EmbeddingDimensionsMode = Literal["auto", "always", "never"]
+EmbeddingEncodingFormat = Literal["float", "base64"]
+EmbeddingEncodingFormatMode = Literal["auto", "float", "base64"]
 
 # OpenAI-compatible models that reject the `dimensions=` request parameter.
 _EMBEDDING_KNOWN_REJECTING_MODELS: frozenset[str] = frozenset(
     {"text-embedding-ada-002"}
 )
+
+# Hosts known to serve base64 embeddings, which are ~3.6x smaller on the wire.
+_EMBEDDING_BASE64_CAPABLE_HOSTS: frozenset[str] = frozenset({"api.openai.com"})
 
 
 def _default_embedding_model_for_transport(transport: EmbeddingTransport) -> str:
@@ -386,7 +392,17 @@ class ConfiguredEmbeddingModelSettings(BaseModel):
     transport: EmbeddingTransport = "openai"
     overrides: ModelOverrideSettings = Field(default_factory=ModelOverrideSettings)
     dimensions_mode: EmbeddingDimensionsMode = "auto"
+    encoding_format_mode: EmbeddingEncodingFormatMode = "auto"
     max_batch_size: Annotated[int, Field(gt=0)] | None = None
+    # Client HTTP timeout in seconds. OpenAI receives seconds; Gemini converts to ms.
+    timeout: float | None = None
+
+    @field_validator("timeout", mode="before")
+    @classmethod
+    def _validate_timeout(cls, v: Any) -> float | None:
+        if v is None:
+            return None
+        return coerce_provider_timeout(v)
 
     @model_validator(mode="before")
     @classmethod
@@ -424,6 +440,15 @@ class EmbeddingModelConfig(BaseModel):
     api_key: str | None = None
     base_url: str | None = None
     max_batch_size: Annotated[int, Field(gt=0)] | None = None
+    # Client HTTP timeout in seconds. OpenAI receives seconds; Gemini converts to ms.
+    timeout: float | None = None
+
+    @field_validator("timeout", mode="before")
+    @classmethod
+    def _validate_timeout(cls, v: Any) -> float | None:
+        if v is None:
+            return None
+        return coerce_provider_timeout(v)
 
     @model_validator(mode="before")
     @classmethod
@@ -549,6 +574,7 @@ def resolve_embedding_model_config(
         api_key=api_key,
         base_url=configured.overrides.base_url,
         max_batch_size=configured.max_batch_size,
+        timeout=configured.timeout,
     )
 
 
@@ -830,6 +856,22 @@ class EmbeddingSettings(HonchoSettings):
             return False
         return "VECTOR_DIMENSIONS" in self.model_fields_set
 
+    def resolve_encoding_format(self) -> EmbeddingEncodingFormat:
+        """Pick the ``encoding_format`` for OpenAI embedding calls.
+
+        ``auto`` keeps the compact base64 wire format on hosts known to support
+        it and falls back to float elsewhere, since OpenAI-compatible providers
+        may answer a base64 request with an error or empty data.
+        """
+        mode = self.MODEL_CONFIG.encoding_format_mode
+        if mode != "auto":
+            return mode
+        base_url = self.MODEL_CONFIG.overrides.base_url
+        if not base_url:
+            return "base64"
+        host = urlparse(base_url).hostname
+        return "base64" if host in _EMBEDDING_BASE64_CAPABLE_HOSTS else "float"
+
 
 class DeriverSettings(HonchoSettings):
     model_config = SettingsConfigDict(  # pyright: ignore
@@ -956,15 +998,14 @@ class PeerCardSettings(HonchoSettings):
     ENABLED: bool = True
 
 
-# Reasoning levels for dialectic - defined here to avoid circular imports with schemas
+# Reasoning levels for dialectic - defined here to avoid circular imports with schemas.
+# region ai
+# REASONING_LEVELS is derived from the Literal, not hand-listed: the annotation
+# rejects an invalid member but not a MISSING one, so a hand-written copy could
+# silently drop a level and still typecheck.
+# endregion
 ReasoningLevel = Literal["minimal", "low", "medium", "high", "max"]
-REASONING_LEVELS: list[ReasoningLevel] = [
-    "minimal",
-    "low",
-    "medium",
-    "high",
-    "max",
-]
+REASONING_LEVELS: list[ReasoningLevel] = list(get_args(ReasoningLevel))
 
 
 class DialecticLevelSettings(BaseModel):

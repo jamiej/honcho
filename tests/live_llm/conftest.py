@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from collections.abc import Iterator
 from typing import Any
 
@@ -51,6 +52,11 @@ def require_provider_key(model_spec: LiveModelSpec) -> None:
 
 
 def require_embedding_key(spec: LiveEmbeddingSpec) -> str:
+    if spec.api_key_env:
+        key = os.getenv(spec.api_key_env)
+        if not key:
+            pytest.skip(f"Missing {spec.api_key_env} for live embedding {spec.id}")
+        return key
     key = {
         "openai": settings.LLM.OPENAI_API_KEY,
         "gemini": settings.LLM.GEMINI_API_KEY,
@@ -60,20 +66,31 @@ def require_embedding_key(spec: LiveEmbeddingSpec) -> str:
     return key
 
 
+_EMBEDDING_CONFIG_OVERRIDE_KEYS = frozenset({"timeout", "max_batch_size"})
+
+
 def make_embedding_client(
     spec: LiveEmbeddingSpec, **overrides: Any
 ) -> _EmbeddingClient:
     """Build a live embedding client for one matrix entry.
 
     Bypasses the `EmbeddingClient` singleton so each spec gets its own client
-    without mutating global settings.
+    without mutating global settings. `timeout` and `max_batch_size` land on
+    `EmbeddingModelConfig`; remaining kwargs go to `_EmbeddingClient`.
     """
+    config_overrides = {
+        key: overrides.pop(key)
+        for key in _EMBEDDING_CONFIG_OVERRIDE_KEYS
+        if key in overrides
+    }
     kwargs: dict[str, Any] = {
         "vector_dimensions": spec.dimensions,
         "max_input_tokens": 2048,
         "max_tokens_per_request": 300_000,
-        # Both providers accept an explicit dimension request for these models.
-        "send_dimensions": True,
+        "send_dimensions": spec.send_dimensions,
+        # Pinned rather than resolved from settings: the matrix exists to exercise
+        # the float path that `auto` only picks for third-party providers.
+        "encoding_format": "float",
     }
     kwargs.update(overrides)
     return _EmbeddingClient(
@@ -81,6 +98,8 @@ def make_embedding_client(
             transport=spec.transport,
             model=spec.model,
             api_key=require_embedding_key(spec),
+            base_url=spec.base_url,
+            **config_overrides,
         ),
         **kwargs,
     )
