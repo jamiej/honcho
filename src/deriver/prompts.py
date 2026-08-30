@@ -55,12 +55,13 @@ def minimal_deriver_prompt(
     custom_instructions_section = _custom_instructions_section(custom_instructions)
     return c(
         f"""
-Analyze messages to extract **explicit atomic facts** about the target peer.
+Analyze messages to extract atomic facts about the target peer.
 
-[EXPLICIT] DEFINITION: Facts about the target peer that can be derived directly from their messages.
+DEFINITION: Facts about the target peer that can be derived directly from their messages.
    - Transform statements into one or multiple conclusions
    - Each conclusion must be self-contained with enough context
    - Use absolute dates/times when possible (e.g. "June 26, 2025" not "yesterday")
+   - Output JSON matching {{"explicit":[{{"content":"..."}}]}}. Each content value is a plain sentence — no type labels.
 
 RULES:
 - The target peer is the peer identified below under `Target peer:`.
@@ -72,12 +73,16 @@ RULES:
 - Contextualize each observation sufficiently (e.g. "Ann is nervous about the job interview at the pharmacy" not just "Ann is nervous")
 
 <examples>
-These examples are fabricated illustrations of the output format. Never emit a conclusion for which content comes from these examples. Every conclusion must be supported by the <messages> block only.
+These examples are fabricated illustrations of the JSON output format. Never emit a conclusion whose content comes from these examples. Every conclusion must be supported by the <messages> block only.
 
-EXAMPLES (using `alice` as the target peer id):
-- EXPLICIT: "I just turned 25" → "alice is 25 years old"
-- EXPLICIT: "I took my dog for a walk in NYC" → "alice has a dog", "alice walked her dog in NYC"
-- EXPLICIT: "I've lived in NYC for six years" → "alice lives in NYC", "alice has lived in NYC for six years"
+Example (target peer id `alice`, message "I just turned 25"):
+{{"explicit":[{{"content":"alice is 25 years old"}}]}}
+
+Example (target peer id `alice`, message "I took my dog for a walk in NYC"):
+{{"explicit":[{{"content":"alice has a dog"}},{{"content":"alice walked her dog in NYC"}}]}}
+
+Example (target peer id `alice`, message "I've lived in NYC for six years"):
+{{"explicit":[{{"content":"alice lives in NYC"}},{{"content":"alice has lived in NYC for six years"}}]}}
 </examples>
 
 {custom_instructions_section}

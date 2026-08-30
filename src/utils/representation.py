@@ -86,7 +86,9 @@ class ObservationMetadata(BaseModel):
 
 
 class ExplicitObservationBase(BaseModel):
-    content: str = Field(description="The explicit observation")
+    content: str = Field(
+        description="Atomic fact about the target peer. Plain sentence using the exact peer id as subject; no type-label prefix."
+    )
 
 
 class DeductiveObservationBase(BaseModel):
@@ -143,7 +145,7 @@ class PromptRepresentation(BaseModel):
     """
 
     explicit: list[ExplicitObservationBase] = Field(
-        description="Facts LITERALLY stated by the user - direct quotes or clear paraphrases only, no interpretation or inference. Example: ['The user is 25 years old', 'The user has a dog named Rover']",
+        description="Atomic facts taken from the target peer's messages. Direct quotes or clear paraphrases only; no interpretation, inference, or type-label prefixes. Use the exact peer id as the subject.",
         default_factory=list,
     )
 
