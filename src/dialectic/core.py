@@ -13,8 +13,13 @@ from typing import Any, cast
 from nanoid import generate as generate_nanoid
 from pydantic import BaseModel
 
-from src import crud
-from src.config import ConfiguredModelSettings, ReasoningLevel, settings
+from src import crud, models
+from src.config import (
+    ConfiguredModelSettings,
+    DialecticLevelSettings,
+    ReasoningLevel,
+    settings,
+)
 from src.dependencies import tracked_db
 from src.dialectic import prompts
 from src.embedding_client import embedding_client
@@ -38,6 +43,7 @@ from src.utils.agent_tools import (
     create_tool_executor,
     search_memory,
 )
+from src.utils.evidence import EvidenceAccumulator
 from src.utils.formatting import format_new_turn_with_timestamp
 from src.utils.types import embedding_call_purpose
 
@@ -71,6 +77,7 @@ class DialecticAgent:
         reasoning_level: ReasoningLevel = "low",
         session_id: str | None = None,
         session_allowlist: list[str] | None = None,
+        evidence: EvidenceAccumulator | None = None,
     ):
         """
         Initialize the dialectic agent.
@@ -88,6 +95,9 @@ class DialecticAgent:
             session_allowlist: Optional session allowlist restricting all recall
                 (conclusions and messages) to these sessions; empty list
                 fails closed
+            evidence: Optional accumulator collecting the conclusions and
+                messages this run reads, for callers that asked for evidence.
+                Passing None collects nothing.
         """
         self.workspace_name: str = workspace_name
         self.session_name: str | None = session_name
@@ -119,6 +129,7 @@ class DialecticAgent:
         ]
         self._session_history_initialized: bool = False
         self._prefetched_conclusion_count: int = 0
+        self.evidence: EvidenceAccumulator | None = evidence
         self._run_id: str = generate_nanoid()  # Always generate for event correlation
 
     def _select_tools(self) -> list[dict[str, Any]]:
@@ -138,6 +149,20 @@ class DialecticAgent:
         if self.session_allowlist is not None:
             tools = [t for t in tools if t.get("name") != "get_reasoning_chain"]
         return tools
+
+    def _tool_choice(
+        self, level_settings: DialecticLevelSettings
+    ) -> str | dict[str, Any] | None:
+        """Pick the tool_choice for this query.
+
+        Defaults to whatever the reasoning level configures. Subclasses override
+        when the agent has no prefetched corpus to fall back on and so must
+        search before it can answer. Forcing "required"/"any" here costs exactly
+        one tool round rather than pinning the loop: `execute_tool_loop` relaxes
+        it to "auto" after the first iteration so the model can still stop and
+        synthesize.
+        """
+        return level_settings.TOOL_CHOICE
 
     async def _initialize_session_history(self) -> None:
         """Fetch and inject session history into the system prompt if configured."""
@@ -218,6 +243,13 @@ class DialecticAgent:
             ):
                 query_embedding = await embedding_client.embed(query)
 
+            # Prefetched conclusions never pass through the tool executor, so
+            # they are recorded here or not at all -- and on a query that
+            # answers without a tool call they are the whole of what was read.
+            prefetched: list[models.Document] | None = (
+                [] if self.evidence is not None else None
+            )
+
             # search_memory manages its own short-lived DB sessions so no
             # connection is held during external vector-store calls.
             explicit_repr = await search_memory(
@@ -229,6 +261,7 @@ class DialecticAgent:
                 levels=["explicit"],
                 embedding=query_embedding,
                 session_allowlist=self.session_allowlist,
+                documents_out=prefetched,
             )
 
             derived_repr = await search_memory(
@@ -240,6 +273,7 @@ class DialecticAgent:
                 levels=["deductive", "inductive", "contradiction"],
                 embedding=query_embedding,
                 session_allowlist=self.session_allowlist,
+                documents_out=prefetched,
             )
 
             if explicit_repr.is_empty() and derived_repr.is_empty():
@@ -260,6 +294,12 @@ class DialecticAgent:
             if not derived_repr.is_empty():
                 # Include IDs for derived so agent can use get_reasoning_chain
                 parts.append(derived_repr.format_as_markdown(include_ids=True))
+
+            # Recorded last: everything above can still fail into the handler
+            # below, which drops the whole block from the prompt. Evidence should
+            # name what the agent saw, not what was fetched for it.
+            if self.evidence is not None and prefetched:
+                self.evidence.add_documents(prefetched)
 
             return "\n".join(parts)
 
@@ -342,6 +382,7 @@ class DialecticAgent:
             run_id=self._run_id,
             agent_type="dialectic",
             parent_category="dialectic",
+            evidence=self.evidence,
         )
 
     def _prefetch_heading(self) -> str:
@@ -373,6 +414,9 @@ class DialecticAgent:
             trace_id=self._run_id,
             span_id=self._run_id,
             session_id=self.session_id,
+            observer=self.observer,
+            observers=[self.observer],
+            observed=self.observed,
             peer_name=self.observed,
             track_name=track_name,
         )
@@ -505,7 +549,7 @@ class DialecticAgent:
                 prompt="",  # Ignored since we pass messages
                 max_tokens=max_tokens,
                 tools=tools,
-                tool_choice=level_settings.TOOL_CHOICE,
+                tool_choice=self._tool_choice(level_settings),
                 tool_executor=tool_executor,
                 max_tool_iterations=level_settings.MAX_TOOL_ITERATIONS,
                 messages=self.messages,
@@ -521,6 +565,9 @@ class DialecticAgent:
         content = response.content
         if isinstance(content, BaseModel):
             content = content.model_dump_json(by_alias=True)
+
+        if self.evidence is not None:
+            self.evidence.record_tool_calls(response.tool_calls_made)
 
         self._log_response_metrics(
             task_name=task_name,
@@ -581,7 +628,7 @@ class DialecticAgent:
                 stream=True,
                 stream_final_only=True,
                 tools=tools,
-                tool_choice=level_settings.TOOL_CHOICE,
+                tool_choice=self._tool_choice(level_settings),
                 tool_executor=tool_executor,
                 max_tool_iterations=level_settings.MAX_TOOL_ITERATIONS,
                 messages=self.messages,
@@ -597,6 +644,9 @@ class DialecticAgent:
             if chunk.content:
                 accumulated_content.append(chunk.content)
                 yield chunk.content
+
+        if self.evidence is not None:
+            self.evidence.record_tool_calls(response.tool_calls_made)
 
         self._log_response_metrics(
             task_name=task_name,

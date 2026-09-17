@@ -91,6 +91,9 @@ _RUNTIME_MOCK_TEST_BLOCKLIST_PREFIXES = (
     # Pure JWT scope tests — operate on src.security directly, no DB needed.
     "tests/test_security.py",
     "tests/test_generate_jwt_script.py",
+    # The mock provider is a standalone ASGI app with no database or LLM of its
+    # own; the runtime mocks would patch the very seams it exists to replace.
+    "tests/mock_provider/",
 )
 
 _LIVE_LLM_MARKER = "live_llm"
@@ -957,6 +960,7 @@ def mock_tracked_db(request: pytest.FixtureRequest):
         "src.dependencies.tracked_db",
         "src.deriver.queue_manager.tracked_db",
         "src.deriver.consumer.tracked_db",
+        "src.deriver.deriver.tracked_db",
         "src.deriver.enqueue.tracked_db",
         "src.routers.peers.tracked_db",
         "src.routers.workspaces.tracked_db",

@@ -20,7 +20,7 @@ from collections.abc import Callable
 from typing import Any
 
 from src import crud
-from src.config import ReasoningLevel, settings
+from src.config import DialecticLevelSettings, ReasoningLevel, settings
 from src.dependencies import tracked_db
 from src.dialectic import prompts
 from src.dialectic.core import DialecticAgent
@@ -31,6 +31,7 @@ from src.utils.agent_tools import (
     create_workspace_tool_executor,
     format_workspace_stats,
 )
+from src.utils.evidence import EvidenceAccumulator
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,7 @@ class WorkspaceDialecticAgent(DialecticAgent):
         reasoning_level: ReasoningLevel = "low",
         session_id: str | None = None,
         session_allowlist: list[str] | None = None,
+        evidence: EvidenceAccumulator | None = None,
     ) -> None:
         super().__init__(
             workspace_name=workspace_name,
@@ -61,6 +63,7 @@ class WorkspaceDialecticAgent(DialecticAgent):
             reasoning_level=reasoning_level,
             session_id=session_id,
             session_allowlist=session_allowlist,
+            evidence=evidence,
         )
         # Replace the pair-oriented system prompt with the workspace one.
         self.messages[0] = {
@@ -161,6 +164,30 @@ class WorkspaceDialecticAgent(DialecticAgent):
             tools = [t for t in tools if t.get("name") not in unscopable]
         return tools
 
+    def _tool_choice(
+        self, level_settings: DialecticLevelSettings
+    ) -> str | dict[str, Any] | None:
+        """Require a tool call on the first turn.
+
+        The pair agent prefetches the observations relevant to its query, so it
+        can legitimately answer from context alone. This agent's prefetch is an
+        orientation overview — scale, active peers, their cards — not the corpus.
+        Left free to skip tools, the model treats that overview as everything it
+        has: it answers when the overview happens to carry the fact, and
+        otherwise writes out the search it should have run and asks the caller
+        which option to take. Workspace chat has no caller to answer, so that
+        response is dead on arrival.
+
+        Recall is the job, so make the first search mandatory and let the loop
+        relax to "auto" afterwards. Any other value a level configures is passed
+        through untouched, so this only overrides the two cases that let the
+        model opt out entirely.
+        """
+        choice = level_settings.TOOL_CHOICE
+        if choice is None or choice == "auto":
+            return "required"
+        return choice
+
     async def _create_tool_executor(self) -> Callable[[str, dict[str, Any]], Any]:
         return await create_workspace_tool_executor(
             workspace_name=self.workspace_name,
@@ -170,6 +197,7 @@ class WorkspaceDialecticAgent(DialecticAgent):
             run_id=self._run_id,
             agent_type="workspace_dialectic",
             parent_category="dialectic",
+            evidence=self.evidence,
         )
 
     # Workspace chat shares the base "dialectic_chat" Langfuse trace name;

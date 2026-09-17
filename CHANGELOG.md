@@ -5,6 +5,59 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](http://keepachangelog.com/)
 and this project adheres to [Semantic Versioning](http://semver.org/).
 
+## [3.2.0] - 2026-09-15
+
+### Added
+
+- Conclusion attribution on the public API: `source_ids` and `times_derived` on the Conclusions response (already stored on documents, previously stripped). `GET /v3/workspaces/{workspace_id}/conclusions/{conclusion_id}` returns a single conclusion with those fields. `source_ids` is filterable via JSONB containment (`{"source_ids": {"contains": "<id>"}}`); `id`, `level`, `source_ids`, and `times_derived` are explicit entries in the documents filter allowlist. The same `contains` fix applies to other JSONB columns, which previously generated invalid ILIKE-on-JSONB SQL. Message attribution (conclusion → source messages) and chain traversal are follow-ups (#952)
+- Opt-in `include_evidence` on pair and workspace chat (`POST /peers/{id}/chat` and `POST /workspaces/{id}/chat`). When true, the response carries the conclusions and messages the agent read plus the tools it called, so a caller can inspect what an answer was built from. Evidence is collated from what the agent accessed, never reported by the model — it over-reports (a conclusion appears because it was seen, not because the answer used it) but is deterministic and costs no model tokens. Off by default so existing callers are unchanged. Streaming puts evidence on the terminal SSE event only (#1129)
+
+### Changed
+
+- CloudEvents LLM and embedding traces (schema version 2) now carry session, workspace, observers, observed, agent type, track name, source message ids, queue item ids, duration, outcome, retry, and a full `system_prompt_ref`. Streamed calls record once at the provider boundary, including interrupted streams. New fields are nullable so v1 archives still load (#1166)
+- Request middleware falls back to `User-Agent` as the CloudEvents `client.host` when `X-Honcho-Host` is absent, so raw REST clients are distinguishable from SDKs without waiting for SDK upgrades. An explicit `X-Honcho-Host` still wins (#1182)
+
+### Fixed
+
+- Dreamer-written conclusions no longer persist fabricated `source_ids`. Unresolvable ids are stripped at the write path; an observation left below its level's minimum real sources is rejected (#945)
+- LLM provider outages (connection failures and upstream 5xx) now surface as 503 instead of an opaque 500. Exhausted retries re-raise the provider error instead of a tenacity `RetryError`. 4xx including 429 is unchanged. The streaming path is not covered (#1165)
+- Peer-scoped keys on `POST /sessions` and `POST /peers` may only name their own peer, must already be a member to get an existing session, and may not send metadata or configuration for one. Creating a fresh session for itself is unchanged. Session-scoped keys are denied on `POST /peers` (#1172)
+- `get_working_representation` reclaims unused query budget when semantic or most-derived search returns fewer unique documents than requested, filling the remainder from recent observations while preserving search priority (#1008)
+- Redis Cluster async client no longer leaks connections on topology re-init. The pin is now `redis>=8.0.1,<9.0.0` (was `<8.0.0`, which excluded the upstream fix in redis-py 8.0.0) (#1157)
+
+## [3.1.2] - 2026-09-09
+
+### Added
+
+- Qdrant vector store backend (`VECTOR_STORE_TYPE=qdrant`) as an optional `qdrant` extra. Point at a server with `VECTOR_STORE_QDRANT_URL` (optional API key, gRPC, HTTPS, prefix, timeout). Same `VECTOR_STORE_MIGRATED` cutover path as the other backends (#683)
+- MCP stdio host (`bun --cwd mcp src/stdio.ts`) for local clients, plus a Streamable HTTP host (`bun src/http.ts` / `mcp/Dockerfile`) with an `mcp` compose service. HTTP requires Bearer on every request including established sessions; idle sessions expire after `MCP_SESSION_IDLE_MS` (default 30m) and are capped at `MCP_SESSION_MAX` (default 128). Sessions are in-process — run one replica (#1102)
+- MCP tools take `scope` (name or list) and `sessions` (session-id allowlist) on `chat`, `page`/`size`/`reverse` on `list_sessions` and `get_session_messages`, plus `list_scopes`, `get_scope_sessions`, and `workspace_chat` (#1139)
+- Deterministic OpenAI-compatible mock provider (`src/mock_provider`) so the stack can run with no model key and no spend. Same image, different entrypoint; chat answers from the request's JSON Schema and embeddings are hash-derived (lexical search only — no semantic recall) (#1094)
+- Ephemeral sandbox (`sandbox/sandbox.sh`): seed snapshots a Postgres template database, reset drops and recreates it (plus Redis flush) without restarting services. Default provider is mock; `--provider real` reads gitignored credentials. Reset refuses a stale snapshot (Alembic revision / fixture hash / provider mode) (#1111)
+- `DERIVER.SCHEDULER=api` (env `DERIVER__SCHEDULER`) moves deriver/dream timers onto the API process so deriver replicas only consume work. Default remains `deriver`. When the API owns scheduling, deriver startup poll jitter is skipped (#1136, #1149)
+- Deriver backlog as Prometheus gauges on the API (`deriver_outstanding_work_seconds`, `deriver_queue_work_units_eligible` / `_claimed`, `deriver_queue_items_pending`, `deriver_queue_oldest_pending_age_seconds`, `dreams_due`, `deriver_metrics_last_success_timestamp_seconds`) and as JSON at `GET /deriver/metrics`. Service-wide DB values — aggregate with `max()`/`avg()`, never `sum()` (#1115)
+- Docker API worker count via `API_WORKERS` (default 1) on the image entrypoint (#1088)
+- Client identity on CloudEvents: request middleware reads `X-Honcho-Host`, `X-Honcho-Plugin`, and `X-Honcho-Agent-Model` into a nested `client` object next to `honcho_version`. Null outside a request (deriver worker). Emitter-injected fields are exempt from per-event schema versioning (#1125)
+
+### Fixed
+
+- Workspace chat requires a tool call on the first turn instead of answering from the prefetch overview alone. `low` was the only level that left tool choice as `auto`, and those calls were skipping search. Pair chat is unchanged. The workspace prompt is also marked non-interactive so it stops offering the caller a menu (#1120)
+
+## [3.1.1] - 2026-09-02
+
+### Changed
+
+- Server `requires-python` is `>=3.13`, matching the production image. Self-hosters on 3.10–3.12 need to upgrade; SDK and CLI floors are unchanged (#1090)
+
+### Fixed
+
+- Concurrent `create_documents` writers to the same collection deadlocked on `times_derived` reinforcement UPDATEs issued in batch order; the error was swallowed per-document, the batch was lost, and the queue item was marked processed. Writers now lock target rows with `SELECT ... ORDER BY id FOR UPDATE` before applying, abort the batch on `SQLAlchemyError` instead of continuing through a dead session, and retry transient errors (deadlock, serialization failure, lock/statement timeout, lost connection) up to `MAX_RETRYABLE_ATTEMPTS` instead of burning the item (#1033)
+- Scope backfill no longer embeds, writes, and syncs every planned copy at once. A 14k-document session is ~580MB of vectors; several concurrent backfills OOM-killed the deriver at its 1000Mi limit and crash-looped because the work units never completed. Phases 2–4 now run per chunk of 500 specs, reload source embeddings per chunk, and drop them once synced. Membership is locked across chunk writes so a concurrent leave cannot commit between the check and the inserts (#1104)
+- Model-generated observations with NUL bytes (`\u0000`) no longer fail the exact-content dedup pre-fetch with a Postgres `DataError` that dropped the whole observer batch. Ingress already stripped NUL from user content; the deriver now strips it so stored text matches embedded text. All-NUL content is dropped rather than stored empty (#1095)
+- `search_messages` no longer forwards `top_k=0` to Turbopuffer (which requires 1..10000). Zero/negative limits short-circuit to empty results; tool limits are floored at 1. The documents path was already guarded (#970); this closes the message path (#1084)
+- OpenAI-compatible tool-call turns with `content=null` keep null through history replay instead of being coerced to `""`. Providers that bind reasoning state to the exact assistant message shape were breaking on the empty string. Tool-less null still becomes `""` (#1064)
+- The production image now ships `pyproject.toml` in the runtime stage, so the service reports its real version instead of `unknown` in OpenAPI and telemetry (#1074)
+
 ## [3.1.0] - 2026-08-25
 
 ### Added
