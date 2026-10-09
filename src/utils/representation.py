@@ -328,7 +328,7 @@ class Representation(BaseModel):
     """
 
     explicit: list[ExplicitObservation] = Field(
-        description="Facts LITERALLY stated by the user - direct quotes or clear paraphrases only, no interpretation or inference. Example: ['The user is 25 years old', 'The user has a dog']",
+        description="Facts LITERALLY stated by the user - direct quotes or clear paraphrases only, no interpretation or inference.",
         default_factory=list,
     )
     deductive: list[DeductiveObservation] = Field(

@@ -2,6 +2,8 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+**Before opening a PR or filing an issue**, read [If you're an agent](CONTRIBUTING.md#if-youre-an-agent) in `CONTRIBUTING.md`. Every PR needs a linked issue labelled `maintainer-approved`, and issues follow [Filing an issue](CONTRIBUTING.md#filing-an-issue). Run the `pre-pr` skill (`skills/pre-pr/`) before opening a PR.
+
 # Honcho Overview
 
 ## What is Honcho?
@@ -270,6 +272,7 @@ src/
 │   ├── representation.py # Representation formatting (distinct from crud/representation.py)
 │   ├── search.py, filter.py, formatting.py
 │   ├── tokens.py         # tiktoken-based counting
+│   ├── pagination.py     # List pagination: opt-in cursor mode + the cached offset shim
 │   ├── work_unit.py, queue_payload.py
 │   ├── config_helpers.py, json_parser.py, files.py
 │   └── types.py
@@ -289,6 +292,7 @@ src/
 - Token counting on messages for usage tracking
 - JSONB metadata fields for extensibility
 - HNSW indexes for vector similarity search
+- **A `Select` that feeds a list endpoint MUST have a total ORDER BY ending in a unique column** (e.g. `created_at, id`). `paginate_offset_or_cursor` (`src/utils/pagination.py`) seeks by the sort key in both cursor mode and the offset shim; without a unique tail, rows that share a sort key are skipped or repeated across pages.
 
 ### Key Architectural Decisions
 
@@ -298,7 +302,7 @@ src/
 4. **"Minimal" deriver**: memory formation is a single structured-output LLM call per batch, not an agentic tool loop. Predictable cost, lower latency. The Dialectic is the one true tool-using agent.
 5. **Provider-agnostic LLM layer** (`src/llm/`): all model calls go through `honcho_llm_call()`. Backends (`anthropic`, `gemini`, `openai`) sit behind a registry; per-agent `MODEL_CONFIG` with fallback chains is resolved at call time.
 6. **Dialectic reasoning tiers**: 5 levels (`minimal` → `max`); each level has its own model config and tool set (`minimal` uses a reduced toolset).
-7. **Hybrid search**: Postgres FTS (GIN index on `to_tsvector('english', content)`) + vector similarity (HNSW on `MessageEmbedding.embedding`). `MessageEmbedding` is a separate table from `Message` with its own `sync_state` so embedding is decoupled from message creation.
+7. **Hybrid search**: Postgres FTS (GIN index on `to_tsvector('english', content)`, OR'd with a `content ILIKE` fallback backed by a `pg_trgm` GIN index; without pg_trgm the index is skipped and the ILIKE scans) + vector similarity (HNSW on `MessageEmbedding.embedding`). `MessageEmbedding` is a separate table from `Message` with its own `sync_state` so embedding is decoupled from message creation.
 8. **Pluggable external vector stores**: defaults to pgvector inline; can swap to turbopuffer or lancedb (`VECTOR_STORE_*` config; `src/vector_store/`).
 9. **Composite-FK multi-tenancy**: `workspace_name` participates in nearly every composite FK. Cross-workspace data leakage is structurally impossible at the schema level.
 10. **Scoped Authentication**: JWTs can be scoped to workspace, peer, or session level.

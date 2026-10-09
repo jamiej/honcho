@@ -5,8 +5,7 @@ from contextlib import suppress
 from time import perf_counter
 
 from fastapi import APIRouter, Body, Depends, Path, Query, Response
-from fastapi_pagination import Page
-from fastapi_pagination.ext.sqlalchemy import apaginate
+from fastapi_pagination.bases import AbstractParams
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from src import config, crud, schemas
@@ -25,6 +24,12 @@ from src.security import JWTParams, require_auth
 from src.telemetry.events import EmbeddingCallPurpose, GetContextEvent, emit
 from src.utils import summarizer
 from src.utils.filter import normalize_session_allowlist
+from src.utils.pagination import (
+    CursorPage,
+    Page,
+    paginate_offset_or_cursor,
+    pagination_params,
+)
 from src.utils.representation import Representation
 from src.utils.search import search
 from src.utils.tokens import estimate_tokens
@@ -266,7 +271,7 @@ def _select_summary_for_context(
 
 @router.post(
     "/list",
-    response_model=Page[schemas.Session],
+    response_model=Page[schemas.Session] | CursorPage[schemas.Session],
     dependencies=[Depends(require_auth(workspace_name="workspace_id"))],
 )
 async def get_sessions(
@@ -275,6 +280,7 @@ async def get_sessions(
         None, description="Filtering and pagination options for the sessions list"
     ),
     reverse: bool = Query(False, description="Whether to reverse the order of results"),
+    params: AbstractParams = Depends(pagination_params),
     db: AsyncSession = read_db,
 ):
     """Get all Sessions for a Workspace, paginated with optional filters."""
@@ -285,13 +291,14 @@ async def get_sessions(
         if filter_param == {}:  # Explicitly check for empty dict
             filter_param = None
 
-    return await apaginate(
+    return await paginate_offset_or_cursor(
         db,
         await crud.get_sessions(
             workspace_name=workspace_id,
             filters=filter_param,
             reverse=reverse,
         ),
+        params,
     )
 
 
@@ -671,7 +678,7 @@ async def set_peer_config(
 
 @router.get(
     "/{session_id}/peers",
-    response_model=Page[schemas.Peer],
+    response_model=Page[schemas.Peer] | CursorPage[schemas.Peer],
     dependencies=[
         Depends(
             require_auth(
@@ -685,6 +692,7 @@ async def set_peer_config(
 async def get_session_peers(
     workspace_id: str = Path(...),
     session_id: str = Path(...),
+    params: AbstractParams = Depends(pagination_params),
     db: AsyncSession = read_db,
 ):
     """Get all Peers in a Session. Results are paginated."""
@@ -692,7 +700,7 @@ async def get_session_peers(
         peers_query = await crud.get_peers_from_session(
             workspace_name=workspace_id, session_name=session_id
         )
-        return await apaginate(db, peers_query)
+        return await paginate_offset_or_cursor(db, peers_query, params)
     except ValueError as e:
         logger.warning(f"Failed to get peers from session {session_id}: {str(e)}")
         raise ResourceNotFoundException("Session not found") from e
@@ -940,6 +948,10 @@ async def get_session_context(
     # Pre-compute embedding outside the DB session (best-effort)
     embedding: list[float] | None = None
     if search_query:
+        # Return any connection the checks above checked out (scope resolution,
+        # allowlist membership) before the external call. The session stays
+        # usable: its next query checks out a fresh connection.
+        await db.close()
         with (
             suppress(Exception),
             embedding_call_purpose(
@@ -948,6 +960,9 @@ async def get_session_context(
                 parent_category="api",
             ),
         ):
+            # Truncate oversized user queries instead of dropping semantic
+            # search; embed() stays strict so agent queries still fail.
+            search_query = embedding_client.truncate_to_token_limit(search_query)
             embedding = await embedding_client.embed(search_query)
 
     # The allowlist recall must respect, whichever way the caller expressed it.
@@ -965,7 +980,9 @@ async def get_session_context(
     representation = await _get_working_representation_task(
         db,
         workspace_id,
-        search_query,
+        # Semantic search only with an embedding; otherwise the downstream
+        # fallback would re-embed while holding this request's DB session.
+        search_query if embedding is not None else None,
         observer=observer,
         observed=observed,
         session_allowlist=effective_allowlist,

@@ -38,10 +38,9 @@ from src.exceptions import HonchoException
 from src.models import Peer, Workspace
 from src.security import JWTParams, create_admin_jwt, create_jwt
 
-# Disable Langfuse for the whole suite before importing src.main: @conditional_observe
-# binds to settings.LANGFUSE_PUBLIC_KEY at import time, so blanking it here keeps mocked
-# test calls from emitting traces to a configured Langfuse backend. Tests that exercise
-# Langfuse patch settings.LANGFUSE_PUBLIC_KEY themselves.
+# Disable Langfuse for the whole suite before importing src.main so mocked test calls
+# never register the exporter against a configured Langfuse backend. Tests that
+# exercise Langfuse patch settings.LANGFUSE_PUBLIC_KEY themselves.
 settings.LANGFUSE_PUBLIC_KEY = None
 
 from src.main import app  # noqa: E402
@@ -88,6 +87,9 @@ _RUNTIME_MOCK_TEST_BLOCKLIST_PREFIXES = (
     "tests/utils/test_clients.py",
     # Session-scope SQL shape — asserts on compiled statements, never executes one.
     "tests/crud/test_session_scope_clauses.py",
+    # Pure prompt-rendering tests — string assembly only, no DB needed.
+    "tests/deriver/test_prompts.py",
+    "tests/utils/test_custom_instructions_prompts.py",
     # Pure JWT scope tests — operate on src.security directly, no DB needed.
     "tests/test_security.py",
     "tests/test_generate_jwt_script.py",
@@ -287,17 +289,18 @@ async def setup_test_database(db_url: URL):
     Returns:
         engine: SQLAlchemy engine
     """
-    engine = create_async_engine(str(db_url), echo=False)
+    engine = create_async_engine(db_url, echo=False)
     async with engine.connect() as conn:
         try:
-            logger.info("Attempting to create pgvector extension...")
+            logger.info("Attempting to create pgvector and pg_trgm extensions...")
             await conn.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+            await conn.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
             await conn.commit()
-            logger.info("pgvector extension created successfully.")
+            logger.info("pgvector and pg_trgm extensions created successfully.")
         except ProgrammingError as e:
             logger.error(f"ProgrammingError: {e}")
             raise RuntimeError(
-                "Failed to create pgvector extension. Make sure it's installed on the PostgreSQL server."
+                "Failed to create pgvector/pg_trgm extensions. Make sure they're installed on the PostgreSQL server."
             ) from e
         except OperationalError as e:
             logger.error(f"OperationalError: {e}")
@@ -602,6 +605,10 @@ def mock_openai_embeddings(request: pytest.FixtureRequest):
             "src.embedding_client.embedding_client.prepare_chunks"
         ) as mock_prepare_chunks,
         patch("src.embedding_client.embedding_client.batch_embed") as mock_batch_embed,
+        patch(
+            "src.embedding_client.embedding_client.truncate_to_token_limit",
+            side_effect=lambda text: text,  # pyright: ignore[reportUnknownLambdaType]
+        ) as mock_truncate,
     ):
         # Mock the embed method to return content-dependent embedding
         def embed_side_effect(content: str) -> list[float]:
@@ -640,6 +647,7 @@ def mock_openai_embeddings(request: pytest.FixtureRequest):
             "simple_batch_embed": mock_simple_batch_embed,
             "prepare_chunks": mock_prepare_chunks,
             "batch_embed": mock_batch_embed,
+            "truncate_to_token_limit": mock_truncate,
         }
 
 
@@ -979,6 +987,7 @@ def mock_tracked_db(request: pytest.FixtureRequest):
         "src.crud.document.tracked_db",
         "src.crud.message.tracked_db",
         "src.reconciler.sync_vectors.tracked_db",
+        "src.reconciler.backfill.tracked_db",
         "src.reconciler.embed_now.tracked_db",
         "src.dialectic.core.tracked_db",
         "src.dreamer.specialists.tracked_db",
